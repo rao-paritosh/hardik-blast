@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cracker Burst</title>
+<link href="https://fonts.googleapis.com/css2?family=Bungee&display=swap" rel="stylesheet">
+<style>
+:root{--sky:#0a0f2c;--paper:#d62828;--gold:#ffc83d;--ink:#fff4dc;color-scheme:dark;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--sky);color:var(--ink);font-family:"Bungee",Impact,system-ui,sans-serif;overflow:hidden;touch-action:manipulation;-webkit-user-select:none;user-select:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+h1{position:fixed;top:calc(env(safe-area-inset-top,0px) + 14px);left:16px;margin:0;font-size:clamp(22px,5vw,38px);font-weight:400;letter-spacing:.02em;pointer-events:none}
+#hint{position:fixed;top:calc(env(safe-area-inset-top,0px) + 56px);left:16px;font:500 14px system-ui,sans-serif;opacity:.75;pointer-events:none;transition:opacity .6s}
+#bar{position:fixed;left:0;right:0;bottom:0;padding:12px 12px calc(env(safe-area-inset-bottom,0px) + 12px);display:flex;gap:8px;justify-content:center;flex-wrap:wrap;background:linear-gradient(transparent,rgba(10,15,44,.9) 40%)}
+button{font:inherit;font-size:14px;padding:11px 14px;border-radius:6px;border:2px solid var(--gold);background:transparent;color:var(--ink);cursor:pointer}
+button[aria-pressed="true"]{background:var(--paper);border-color:var(--paper)}
+button:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<h1>Cracker Burst</h1>
+<div id="hint">Tap the sky. Turn sound up.</div>
+<div id="bar">
+  <button data-t="rocket" aria-pressed="true">Rocket</button>
+  <button data-t="bomb" aria-pressed="false">Bomb</button>
+  <button data-t="ladi" aria-pressed="false">Ladi</button>
+  <button id="show" aria-pressed="false">Auto show</button>
+  <button id="snd" aria-pressed="true">Sound on</button>
+</div>
+<script>
+const cv=document.getElementById('c'),g=cv.getContext('2d');
+let W,H,dpr;
+function size(){dpr=Math.min(devicePixelRatio||1,2);W=innerWidth;H=innerHeight;cv.width=W*dpr;cv.height=H*dpr;g.setTransform(dpr,0,0,dpr,0,0)}
+addEventListener('resize',size);size();
+
+/* ---------- sound (synthesized, no files) ---------- */
+let ac,noise,soundOn=true;
+function initAudio(){
+  if(ac){if(ac.state==='suspended')ac.resume();return}
+  try{
+    ac=new (window.AudioContext||window.webkitAudioContext)();
+    const n=ac.sampleRate*2,b=ac.createBuffer(1,n,ac.sampleRate),d=b.getChannelData(0);
+    for(let i=0;i<n;i++)d[i]=Math.random()*2-1;
+    noise=b;
+  }catch(e){ac=null}
+}
+function bang(vol=1,pan=0,low=900,when=0){
+  if(!ac||!soundOn)return;
+  const t=ac.currentTime+when,s=ac.createBufferSource();s.buffer=noise;
+  const f=ac.createBiquadFilter();f.type='lowpass';f.frequency.setValueAtTime(low*3,t);f.frequency.exponentialRampToValueAtTime(low/3,t+.4);
+  const gn=ac.createGain();gn.gain.setValueAtTime(vol,t);gn.gain.exponentialRampToValueAtTime(.001,t+.7);
+  const p=ac.createStereoPanner?ac.createStereoPanner():null;if(p)p.pan.value=pan;
+  s.connect(f);f.connect(gn);p?(gn.connect(p),p.connect(ac.destination)):gn.connect(ac.destination);
+  s.start(t,Math.random(),.8);
+  const o=ac.createOscillator(),og=ac.createGain();
+  o.frequency.setValueAtTime(140,t);o.frequency.exponentialRampToValueAtTime(35,t+.25);
+  og.gain.setValueAtTime(vol*.9,t);og.gain.exponentialRampToValueAtTime(.001,t+.35);
+  o.connect(og);og.connect(ac.destination);o.start(t);o.stop(t+.4);
+}
+function snap(vol=.35,when=0){
+  if(!ac||!soundOn)return;
+  const t=ac.currentTime+when,s=ac.createBufferSource();s.buffer=noise;
+  const f=ac.createBiquadFilter();f.type='highpass';f.frequency.value=1800;
+  const gn=ac.createGain();gn.gain.setValueAtTime(vol,t);gn.gain.exponentialRampToValueAtTime(.001,t+.05);
+  s.connect(f);f.connect(gn);gn.connect(ac.destination);s.start(t,Math.random()*1.5,.06);
+}
+function whistle(dur){
+  if(!ac||!soundOn)return;
+  const t=ac.currentTime,o=ac.createOscillator(),gn=ac.createGain();
+  o.type='sine';o.frequency.setValueAtTime(500,t);o.frequency.exponentialRampToValueAtTime(1800,t+dur);
+  gn.gain.setValueAtTime(.07,t);gn.gain.linearRampToValueAtTime(0,t+dur);
+  o.connect(gn);gn.connect(ac.destination);o.start(t);o.stop(t+dur);
+}
+
+/* ---------- visuals ---------- */
+const parts=[],rockets=[],waves=[];
+const pal=[[255,200,61],[255,90,60],[255,60,150],[90,220,255],[140,255,120],[190,130,255],[255,255,255]];
+const rnd=(a,b)=>a+Math.random()*(b-a);
+function burst(x,y,big=1){
+  const c=pal[Math.floor(Math.random()*pal.length)],c2=pal[Math.floor(Math.random()*pal.length)];
+  const n=Math.floor(90*big),ring=Math.random()<.4;
+  for(let i=0;i<n;i++){
+    const a=Math.PI*2*i/n+rnd(-.03,.03),sp=ring?rnd(3.6,4)*big:rnd(.8,5)*big,col=i%3?c:c2;
+    parts.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1,decay:rnd(.008,.016),col,s:rnd(1.2,2.4),sp:Math.random()<.2});
+  }
+  bang(.55*big,(x/W)*2-1,1100);
+  for(let i=0;i<6;i++)snap(.15,.08+i*rnd(.03,.09));
+}
+function rocket(x,y){
+  initAudio();
+  rockets.push({x:x+rnd(-20,20),y:H,tx:x,ty:y,vy:-(H-y)/55});
+  whistle(.8);
+}
+function bomb(x,y){
+  initAudio();
+  waves.push({x,y,r:6,a:1});
+  for(let i=0;i<70;i++){const a=Math.random()*6.28,sp=rnd(1,9);parts.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1,decay:rnd(.03,.06),col:[255,160,60],s:rnd(1.5,3.5)})}
+  parts.push({x,y,vx:0,vy:0,life:1,decay:.1,col:[255,255,255],s:46});
+  bang(1.5,(x/W)*2-1,500);
+  document.body.animate([{transform:'translate(0,0)'},{transform:'translate(-6px,4px)'},{transform:'translate(5px,-5px)'},{transform:'translate(0,0)'}],{duration:260});
+}
+function ladi(x,y){
+  initAudio();
+  const n=26;
+  for(let i=0;i<n;i++){
+    const d=i*.075;
+    setTimeout(()=>{
+      const px=x+rnd(-40,40),py=y-i*7+rnd(-10,10);
+      for(let k=0;k<16;k++){const a=Math.random()*6.28,sp=rnd(1,4);parts.push({x:px,y:py,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:1,decay:rnd(.04,.08),col:[255,210,90],s:rnd(1,2)})}
+      parts.push({x:px,y:py,vx:0,vy:0,life:1,decay:.2,col:[255,255,255],s:14});
+    },d*1000);
+    bang(.4,(x/W)*2-1,1500,d);snap(.3,d+.01);
+  }
+}
+let mode='rocket';
+function fire(x,y){
+  initAudio();
+  document.getElementById('hint').style.opacity=0;
+  ({rocket,bomb,ladi})[mode](x,y);
+}
+cv.addEventListener('pointerdown',e=>fire(e.clientX,e.clientY));
+
+function frame(){
+  g.globalCompositeOperation='source-over';
+  g.fillStyle='rgba(10,15,44,.22)';g.fillRect(0,0,W,H);
+  g.globalCompositeOperation='lighter';
+  for(let i=rockets.length-1;i>=0;i--){
+    const r=rockets[i];r.y+=r.vy;r.x+=(r.tx-r.x)*.03;
+    g.fillStyle='#ffd98a';g.beginPath();g.arc(r.x,r.y,2.2,0,6.28);g.fill();
+    parts.push({x:r.x,y:r.y,vx:rnd(-.2,.2),vy:rnd(.5,1.2),life:.6,decay:.06,col:[255,170,70],s:1.2});
+    if(r.y<=r.ty){burst(r.x,r.y,rnd(.8,1.3));rockets.splice(i,1)}
+  }
+  for(let i=waves.length-1;i>=0;i--){
+    const w=waves[i];w.r+=14;w.a-=.06;
+    if(w.a<=0){waves.splice(i,1);continue}
+    g.strokeStyle='rgba(255,220,160,'+w.a+')';g.lineWidth=3;g.beginPath();g.arc(w.x,w.y,w.r,0,6.28);g.stroke();
+  }
+  for(let i=parts.length-1;i>=0;i--){
+    const p=parts[i];
+    p.vx*=.985;p.vy=p.vy*.985+.045;p.x+=p.vx;p.y+=p.vy;p.life-=p.decay;
+    if(p.life<=0){parts.splice(i,1);continue}
+    const tw=p.sp&&Math.random()<.5?0:1;
+    g.fillStyle='rgba('+p.col[0]+','+p.col[1]+','+p.col[2]+','+(p.life*tw)+')';
+    g.beginPath();g.arc(p.x,p.y,p.s*(p.s>20?p.life:1),0,6.28);g.fill();
+  }
+  requestAnimationFrame(frame);
+}
+g.fillStyle='#0a0f2c';g.fillRect(0,0,W,H);
+frame();
+
+/* ---------- controls ---------- */
+document.querySelectorAll('[data-t]').forEach(b=>b.addEventListener('click',()=>{
+  mode=b.dataset.t;
+  document.querySelectorAll('[data-t]').forEach(x=>x.setAttribute('aria-pressed',x===b));
+}));
+const snd=document.getElementById('snd');
+snd.addEventListener('click',()=>{
+  soundOn=!soundOn;snd.setAttribute('aria-pressed',soundOn);snd.textContent=soundOn?'Sound on':'Sound off';initAudio();
+});
+let timer=null;const show=document.getElementById('show');
+function auto(){
+  const m=['rocket','rocket','rocket','bomb','ladi'][Math.floor(Math.random()*5)];
+  ({rocket,bomb,ladi})[m](rnd(W*.1,W*.9),rnd(H*.15,H*.55));
+  timer=setTimeout(auto,rnd(500,1400));
+}
+show.addEventListener('click',()=>{
+  initAudio();
+  const on=show.getAttribute('aria-pressed')!=='true';
+  show.setAttribute('aria-pressed',on);
+  document.getElementById('hint').style.opacity=0;
+  if(on)auto();else clearTimeout(timer);
+});
+</script>
+</body>
+</html>
